@@ -12,6 +12,9 @@
 #define DISK_BYTE_SIZE 			(MAXBLOCK*PAGE_PER_BLOCK*BYTE_PER_PAGE) // 512KB
 #define BLOCK_BYTE_SIZE 		(PAGE_PER_BLOCK*BYTE_PER_PAGE)			
 #define MAX_ERASE_CNT			100
+
+#define SC_CACHE_SIZE			100
+
 typedef int	 flash_size_t;
 
 /*
@@ -49,12 +52,98 @@ flash_size_t RejuBlockList[MAXBLOCK];
 flash_size_t HighActiveBlockPtr, LowActiveBlockPtr;
 flash_size_t HighActivePagePtr, LowActivePagePtr;
 
-/*
-	Second Chance LRU
+
+
+/***************************************/	
+/*		Beg of Second Change Cache 	   */
+/***************************************/
+
+/*@ predicate Unique{L}(int *a, integer size) =
+  @ \forall integer i,j; 0 <= i < j < size && a[i]!=-1 && a[j]!=-1 ==> a[i] != a[j] ;
+  @*/
+
+flash_size_t Cache[SC_CACHE_SIZE] 		= {-1};
+flash_size_t ChanceArr[SC_CACHE_SIZE] 	= {0};
+flash_size_t ChancePtr = 0; // index in ChanceArr
+flash_size_t CacheSize = SC_CACHE_SIZE;
+
+/*@ requires 0 < CacheSize < 2147483645 && page >= 0;
+    requires \valid(  Cache+(0..size-1) );
+    requires Unique(Cache, size);
+    requires \valid(  ChanceArr+(0..size-1) );
+    assigns Cache[0..size-1];
+    assigns ChanceArr[0..size-1];
+    ensures Unique(Cache, size);
 */
-int FTLIsHotPage(flash_size_t addr){
-	assert(addr > 0);
-	return 1;
+// update ChanceArr if page exist, return if page exist
+int find_and_update(flash_size_t page)
+{ 
+	int i;
+    /*@loop invariant 0 <= i <= CacheSize;
+       loop invariant \forall integer j; j <= CacheSize-1 ==> ChanceArr[j]==0 ^^ ChanceArr[j]==1;
+       loop assigns i;
+     */
+    for (i=0; i<CacheSize; i++) {
+        if (Cache[i]==page) {
+            ChanceArr[i] = 1;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/*@ requires 0 < CacheSize < 2147483645 && page >= 0;
+    requires CacheSize-1 >= ChancePtr >= 0;
+    requires \valid( Cache+(0..size-1) );
+    requires Unique(Cache,size);
+    assigns Cache[0..CacheSize-1];
+    assigns ChancePtr[0..CacheSize-1];
+   
+    ensures \exists integer i;  Cache[i]==page; 
+    ensures Unique(Cache,CacheSize);
+    ensures 0 <= ChancePtr <= CacheSize-1; 	
+*/
+// find an entry of no chance, replace it with page, update ChanceArr
+void replace_and_update(flash_size_t page)
+{
+	int idx = ChancePtr;
+	/*@ loop assigns Cache[0..CacheSize-1];
+        loop assigns idx;
+        loop assigns ChanceArr[0..size-1];
+        loop invariant 0 <= idx <= CacheSize-1;
+	*/
+	while (1) {
+	    if (ChanceArr[idx]==0) {
+            Cache[idx] = page;
+            ChancePtr = (idx+1)%CacheSize;
+			return;
+        }
+        ChanceArr[idx] = 0;
+        ChancePtr = (idx+1)%CacheSize;
+    }
+}
+
+
+// called when referencing page
+void updateCache(flash_size_t page){
+	int exist = find_and_update(page);
+	if( !exist )
+		replace_and_update(page);
+}
+
+/***************************************/	
+/*		End of Second Change Cache 	   */
+/***************************************/
+
+
+// currently brute force, traverse cache once
+int FTLIsHotPage(flash_size_t page){
+	assert(page > 0);
+	for(int i=0; i<CacheSize; ++i){
+		if(Cache[i]==page) 
+			return 1;
+	}
+	return 0;
 }
 
 // assume pba1 and pba2 are both byte addr. pba is physical block address.
@@ -287,7 +376,7 @@ void FTLGarbageCollection(){
 				victimBlock = b;
 			}
 		}
-
+	}
 	assert(victimBlock != -1);
 
 	//live page copy
