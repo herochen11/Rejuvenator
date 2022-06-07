@@ -42,8 +42,8 @@ flash_size_t Tau = 16;
 flash_size_t M;
 flash_size_t MinWear = 0;
 flash_size_t MaxWear = 0;
-flash_size_t LowCleanBlockCnt;
-flash_size_t HighCleanBlockCnt;
+flash_size_t LowCleanBlockCnt, HighCleanBlockCnt;
+flash_size_t HighBlockCnt, LowBlockCnt;
 flash_size_t CleanBlockCnt;
 flash_size_t BeginOfBlockListOffset[MAX_ERASE_CNT+1] = {0};		// The begin offset of "erase count" in the RejuBlockList.
 flash_size_t EndOfBlockListOffset[MAX_ERASE_CNT+1] = {0};	    // The end offset of "erase count" in the RejuBlockList.
@@ -146,15 +146,16 @@ int FTLIsHotPage(flash_size_t page){
 	return 0;
 }
 
-// assume pba1 and pba2 are both byte addr. pba is physical block address.
+int LBAtoPBA(flash_size_t lba){
+	return PageMappingTable[lba];
+}
+
+//* copy the content of page from "pba" to destination block and page.
+//******* Update FlashMemory ******* //
 void copyPage(flash_size_t pba, flash_size_t dst_block,flash_size_t dst_page){
 	flash_size_t src_block = pba/PAGE_PER_BLOCK; 
 	flash_size_t src_page =  (pba % PAGE_PER_BLOCK)/BYTE_PER_PAGE;
 	FlashMemory[dst_block][dst_page] = FlashMemory[src_block][src_page];
-}
-
-int LBAtoPBA(flash_size_t lba){
-	return PageMappingTable[lba];
 }
 
 int FTLIsValidPage(flash_size_t pba){
@@ -166,19 +167,15 @@ int FTLIsValidPage(flash_size_t pba){
 		return 0;
 }
 
-// invalidate page p
-// its block = p/PAGE_PER_BLOCk/BYTE_PER_PAGE
-// update invalid page of block
+//* invalidate page p
+//******* update FlashMemory ******* //
 void FTLInvalidatePage(flash_size_t pba){
 	flash_size_t block = pba/PAGE_PER_BLOCK; 
 	flash_size_t page =  (pba % PAGE_PER_BLOCK)/BYTE_PER_PAGE;
 	FlashMemory[block][page] = INVALID;	
 }
 
-void FTLValidatePage(flash_size_t block, flash_size_t page){
-	FlashMemory[block][page] = block;	
-}
-
+//******** Update LowActiveBlockPtr, LowActivePagePtr, HighActiveBlockPtr, HighActivePagePtr, LowFreeBlockListHead, HighFreeBlockListHead *******//
 void FTLUpdateActivePtr(){
 	// update LowActivePtr
 	LowActiveBlockPtr = LowFreeBlockList[LowFreeBlockListHead];
@@ -186,14 +183,20 @@ void FTLUpdateActivePtr(){
 	{
 		LowActivePagePtr = 0;
 		LowFreeBlockListHead++;
-		if(LowFreeBlockListHead < MAXBLOCK)
+		LowCleanBlockCnt--;
+		if(LowFreeBlockListHead < MAXBLOCK && LowFreeBlockListHead <= LowFreeBlockListTail) 
 		{
 			LowActiveBlockPtr = LowFreeBlockList[LowFreeBlockListHead];
 		}
-		else
+		else if (LowFreeBlockListHead >= MAXBLOCK && LowFreeBlockListHead <= LowFreeBlockListTail)
 		{	
 			LowFreeBlockListHead = 0;
 			LowActiveBlockPtr = LowFreeBlockList[LowFreeBlockListHead];
+		}
+		else // Head > Tail
+		{
+			printf("Error: No free block in lowered numbered list\n");
+			exit(1);
 		}
 
 	}
@@ -211,14 +214,20 @@ void FTLUpdateActivePtr(){
 		{
 			HighActivePagePtr = 0;
 			HighFreeBlockListHead++;
-			if(HighFreeBlockListHead < MAXBLOCK)
+			HighCleanBlockCnt--;
+			if(HighFreeBlockListHead < MAXBLOCK && HighFreeBlockListHead <= HighFreeBlockListTail)
 			{
 				HighActiveBlockPtr = HighFreeBlockList[HighFreeBlockListHead];
 			}
-			else
+			else if(HighFreeBlockListHead >= MAXBLOCK && HighFreeBlockListHead <= HighFreeBlockListTail)
 			{	
 				HighFreeBlockListHead = 0;
 				HighActiveBlockPtr = HighFreeBlockList[HighFreeBlockListHead];
+			}
+			else
+			{
+				printf("Error: No free block in higher numbered list\n");
+				exit(1);
 			}
 
 		}
@@ -227,12 +236,13 @@ void FTLUpdateActivePtr(){
 }
 
 // update Page mapping table, if PMT entry (lba, pba1) => (bla, pba2)
+//******* Update PageMappintTable, FlashMemory *******//
 void FTLUpdatePageTable(flash_size_t pba, flash_size_t new_block, flash_size_t new_page){
 	flash_size_t old_block = pba/PAGE_PER_BLOCK; 
 	flash_size_t old_page =  (pba % PAGE_PER_BLOCK)/BYTE_PER_PAGE;
 
 	PageMappingTable[FlashMemory[old_block][old_page]] = new_block * BLOCK_BYTE_SIZE + new_page * BYTE_PER_PAGE;
-	FlashMemory[new_block][new_page] =  FlashMemory[old_block][old_page];
+	//FlashMemory[new_block][new_page] =  FlashMemory[old_block][old_page];
 }
 
 void UpdateRejuParameter(){
@@ -282,23 +292,22 @@ void InitRejuBlockList(){
 		BeginOfBlockListOffset[i] = MAXBLOCK;
 		EndOfBlockListOffset[i] = MAXBLOCK-1;
 	}
-	LowCleanBlockCnt = MAXBLOCK;
-	HighCleanBlockCnt = 0;
+	LowCleanBlockCnt = LowBlockCnt = MAXBLOCK;
+	HighCleanBlockCnt = HighBlockCnt = 0;
 	CleanBlockCnt = MAXBLOCK;
 	MinWear = MaxWear = 0;
 	M = Tau/2;
 }
 
-
+//update FreeBlockList
 void PutFreeBlock(flash_size_t BlockID)
 {
 
 	if(	BlockEraseCnt[BlockID] > M )
 	{	
-		if(HighCleanBlockCnt == 0)
+		if(HighBlockCnt == 0)  //the first block that put into the high numbered list
 		{
 			HighFreeBlockListHead = 0;
-			HighFreeBlockList[HighFreeBlockListHead] = BlockID;
 		}
 		
 		if( (HighFreeBlockListTail + 1) == MAXBLOCK)
@@ -315,7 +324,6 @@ void PutFreeBlock(flash_size_t BlockID)
 			LowFreeBlockListTail++;
 		LowFreeBlockList[LowFreeBlockListTail] = BlockID;
 	} 
-
 }
 
 void FTLEraseOneBlock(flash_size_t BlockID){
@@ -371,7 +379,7 @@ void FTLGarbageCollection(){
 		if(end==MAXBLOCK) continue; // empty list in RejBlockList
 		for(; begin <= end; ++begin){
 			flash_size_t b = RejuBlockList[begin];
-			if( ValidPageCnt[b] < minValidPageCnt && LowFreeBlockList[b] == FBL_NOT_IN_LIST){
+			if( ValidPageCnt[b] < minValidPageCnt /*&& LowFreeBlockList[b] == FBL_NOT_IN_LIST*/){ //TODO: check the block is not in free block list
 				minValidPageCnt = ValidPageCnt[b];
 				victimBlock = b;
 			}
@@ -381,19 +389,17 @@ void FTLGarbageCollection(){
 
 	//live page copy
 	flash_size_t physicalOffset = victimBlock*BLOCK_BYTE_SIZE; //physical offset in the memory 
-	flash_size_t bOffset = 0; //the offest in the victim block (unit is page)
+	flash_size_t bOffset = physicalOffset; //the offest in the victim block (unit is page)
 	for(flash_size_t p=bOffset; p+=BYTE_PER_PAGE; p<bOffset + BLOCK_BYTE_SIZE){
 		if( !FTLIsValidPage(p) ) continue;
-		FTLUpdateActivePtr();
+		FTLUpdateActivePtr(); 
 		if( FTLIsHotPage(p) ){
 			copyPage(p, LowActiveBlockPtr, LowActivePagePtr);
-			FTLValidatePage(LowActiveBlockPtr, LowActivePagePtr);
 			FTLUpdatePageTable(p, LowActiveBlockPtr, LowActivePagePtr);
 			LowActivePagePtr++;
 		}
 		else{
 			copyPage(p, HighActiveBlockPtr, HighActivePagePtr);
-			FTLValidatePage(HighActiveBlockPtr, HighActivePagePtr);
 			FTLUpdatePageTable(p, HighActiveBlockPtr, HighActivePagePtr);
 			HighActivePagePtr++;
 		}	
