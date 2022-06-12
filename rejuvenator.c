@@ -12,7 +12,6 @@
 #define DISK_BYTE_SIZE 			(MAXBLOCK*PAGE_PER_BLOCK*BYTE_PER_PAGE) // 512KB
 #define BLOCK_BYTE_SIZE 		(PAGE_PER_BLOCK*BYTE_PER_PAGE)			
 #define MAX_ERASE_CNT			100
-
 #define SC_CACHE_SIZE			100
 
 typedef int	 flash_size_t;
@@ -40,6 +39,7 @@ flash_size_t HighFreeBlockListTail;
 */ 
 flash_size_t Tau = 16;
 flash_size_t M;
+flash_size_t R; //When using linear decrease, the vlaue of "Tao" is R% of (MAX_ERASE_CNT - MaxWear)
 flash_size_t MinWear = 0;
 flash_size_t MaxWear = 0;
 flash_size_t LowCleanBlockCnt, HighCleanBlockCnt;
@@ -245,9 +245,11 @@ void FTLUpdatePageTable(flash_size_t pba, flash_size_t new_block, flash_size_t n
 	//FlashMemory[new_block][new_page] =  FlashMemory[old_block][old_page];
 }
 
-void UpdateTau(){
-	//TODO
-	//update Tau
+//linear decrease
+void UpdateTau_Linear(){
+	flash_size_t life_diff = MAX_ERASE_CNT - MaxWear;
+	double percent = (double)R/(double)100;
+	Tau = (flash_size_t)((double)life_diff * R);
 }
 
 
@@ -332,6 +334,7 @@ void InitRejuBlockList(){
 	CleanBlockCnt = MAXBLOCK;
 	MinWear = MaxWear = 0;
 	M = Tau/2;
+	R = 10;
 }
 
 
@@ -493,7 +496,7 @@ void FTLGarbageCollection(){
 
 	//erase block
 	FTLEraseOneBlock(victimBlock);
-	UpdateTau();
+	UpdateTau_Linear();
 
 }
 
