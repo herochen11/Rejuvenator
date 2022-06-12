@@ -159,9 +159,9 @@ void copyPage(flash_size_t pba, flash_size_t dst_block,flash_size_t dst_page){
 }
 
 int FTLIsValidPage(flash_size_t pba){
-	flash_size_t blockId = pba/PAGE_PER_BLOCK; 
-	flash_size_t offset =  (pba % PAGE_PER_BLOCK)/BYTE_PER_PAGE;
-	if(FlashMemory[blockId][offset] != INVALID && FlashMemory[blockId][offset] != CLEAN)
+	flash_size_t block = pba/PAGE_PER_BLOCK; 
+	flash_size_t page =  (pba % PAGE_PER_BLOCK)/BYTE_PER_PAGE;
+	if(FlashMemory[block][page] != INVALID && FlashMemory[block][page] != CLEAN)
 		return 1;
 	else 
 		return 0;
@@ -245,10 +245,45 @@ void FTLUpdatePageTable(flash_size_t pba, flash_size_t new_block, flash_size_t n
 	//FlashMemory[new_block][new_page] =  FlashMemory[old_block][old_page];
 }
 
-void UpdateRejuParameter(){
+void UpdateTau(){
 	//TODO
 	//update Tau
-	M = Tau/2;
+}
+
+
+// update the intermdiate value "M". The updation of "M" only happens when a data migration occurs.
+// Increase M by 1 when hot data flow is more. (window movement is restricted at lower end) 
+// Decrease M by 1 when cold data flow is more. (window movement is restricted at higher end) 
+void UpdateM(flash_size_t pattern){
+	
+	//update M
+	flash_size_t old_M = M;
+	if(pattern == 1)
+	{
+		M++;
+		for(int i=HighFreeBlockListHead; i <=HighFreeBlockListTail; i++){
+			flash_size_t blockID = HighFreeBlockList[i];
+			if(BlockEraseCnt[blockID] == M){
+				RemoveBlcokFromHighFBL(blockID, i);
+				PutFreeBlock(blockID);
+				LowBlockCnt++;
+			}	
+		}
+	}
+	else if(pattern == 0)
+	{
+		M--;
+		for(int i=LowFreeBlockListHead; i <=LowFreeBlockListTail; i++){
+			flash_size_t blockID = LowFreeBlockList[i];
+			if(BlockEraseCnt[blockID] == old_M){
+				RemoveFromLowFBL(blockID, i);
+				PutFreeBlock(blockID);
+				HighBlockCnt++;
+			}	
+		}
+	}
+
+
 }
 
 void InitFlashMemory(){
@@ -299,6 +334,59 @@ void InitRejuBlockList(){
 	M = Tau/2;
 }
 
+
+//reove a block from higher numbered free block list
+void RemoveBlockFromHighFBL(flash_size_t BlcokID, flash_size_t listOffset){
+	
+	if(HighFreeBlockListHead <= HighFreeBlockListTail) 
+	{
+		for(int i=listOffset; i < HighFreeBlockListTail; i++){ //move the blocks forword	 
+			HighFreeBlockList[i] = HighFreeBlockList[i+1];
+		}
+		
+		HighFreeBlockList[HighFreeBlockListTail] = FBL_NOT_IN_LIST;
+		HighFreeBlockListTail--;
+	}
+	else if(HighFreeBlockListHead > HighFreeBlockListTail)  
+	{
+		for(int i=listOffset; i > HighFreeBlockListHead; i--){	//move the blocks backword
+			HighFreeBlockList[i] = HighFreeBlockList[i-1];
+		}
+		
+		HighFreeBlockList[HighFreeBlockListHead] = FBL_NOT_IN_LIST;
+		HighFreeBlockListHead++;
+	}
+
+	HighBlockCnt--;
+	HighCleanBlockCnt--;
+}
+
+//remove a block from lower numbered free block list
+void RemoveBlockFromLowFBL(flash_size_t BlcokID, flash_size_t listOffset){
+	
+	if(LowFreeBlockListHead <= LowFreeBlockListTail)
+	{
+		for(int i=listOffset; i < LowFreeBlockListTail; i++){	 //move the blocks forword
+			LowFreeBlockList[i] = LowFreeBlockList[i+1];
+		}
+		
+		LowFreeBlockList[LowFreeBlockListTail] = FBL_NOT_IN_LIST;
+		LowFreeBlockListTail--;
+	}
+	else if(LowFreeBlockListHead > LowFreeBlockListTail) 
+	{
+		for(int i=listOffset; i > LowFreeBlockListHead; i--){	//move the blocks backword
+			LowFreeBlockList[i] = LowFreeBlockList[i-1];
+		}
+		
+		LowFreeBlockList[LowFreeBlockListHead] = FBL_NOT_IN_LIST;
+		LowFreeBlockListHead++;
+	}
+	
+	LowBlockCnt--;
+	LowCleanBlockCnt--;
+}
+
 //update FreeBlockList
 void PutFreeBlock(flash_size_t BlockID)
 {
@@ -315,6 +403,7 @@ void PutFreeBlock(flash_size_t BlockID)
 		else 
 			HighFreeBlockListTail++;
 		HighFreeBlockList[HighFreeBlockListTail] = BlockID;
+		HighCleanBlockCnt++;
 	}
 	else
 	{	
@@ -323,6 +412,7 @@ void PutFreeBlock(flash_size_t BlockID)
 		else 
 			LowFreeBlockListTail++;
 		LowFreeBlockList[LowFreeBlockListTail] = BlockID;
+		LowCleanBlockCnt++;
 	} 
 }
 
@@ -359,11 +449,6 @@ void FTLEraseOneBlock(flash_size_t BlockID){
 	if(EndOfBlockListOffset[MinWear] == -1) MinWear++;
 	assert((MaxWear - MinWear) <= Tau );
 
-	if(eraseCnt+1 > M)
-		++HighCleanBlockCnt;
-	else	
-		++LowCleanBlockCnt;	
-	
 	++ CleanBlockCnt;
 	
 }
@@ -408,7 +493,7 @@ void FTLGarbageCollection(){
 
 	//erase block
 	FTLEraseOneBlock(victimBlock);
-	UpdateRejuParameter();
+	UpdateTau();
 
 }
 
