@@ -182,6 +182,7 @@ void FTLUpdateActivePtr(){
 	if( LowActivePagePtr >= PAGE_PER_BLOCK )
 	{
 		LowActivePagePtr = 0;
+		LowFreeBlockList[LowFreeBlockListHead] = FBL_NOT_IN_LIST;
 		LowFreeBlockListHead++;
 		LowCleanBlockCnt--;
 		if(LowFreeBlockListHead < MAXBLOCK && LowFreeBlockListHead <= LowFreeBlockListTail) 
@@ -213,6 +214,7 @@ void FTLUpdateActivePtr(){
 		if( HighActivePagePtr >= PAGE_PER_BLOCK )
 		{
 			HighActivePagePtr = 0;
+			HighFreeBlockList[HighFreeBlockListHead] = FBL_NOT_IN_LIST;
 			HighFreeBlockListHead++;
 			HighCleanBlockCnt--;
 			if(HighFreeBlockListHead < MAXBLOCK && HighFreeBlockListHead <= HighFreeBlockListTail)
@@ -278,7 +280,7 @@ void UpdateM(flash_size_t pattern){
 		for(int i=LowFreeBlockListHead; i <=LowFreeBlockListTail; i++){
 			flash_size_t blockID = LowFreeBlockList[i];
 			if(BlockEraseCnt[blockID] == old_M){
-				RemoveFromLowFBL(blockID, i);
+				RemoveBlockFromLowFBL(blockID, i);
 				PutFreeBlock(blockID);
 				HighBlockCnt++;
 			}	
@@ -394,7 +396,7 @@ void RemoveBlockFromLowFBL(flash_size_t BlcokID, flash_size_t listOffset){
 void PutFreeBlock(flash_size_t BlockID)
 {
 
-	if(	BlockEraseCnt[BlockID] > M )
+	if(	BlockEraseCnt[BlockID] > (MinWear+ M) )
 	{	
 		if(HighBlockCnt == 0)  //the first block that put into the high numbered list
 		{
