@@ -55,7 +55,7 @@ flash_size_t HighActivePagePtr, LowActivePagePtr;
 
 
 /***************************************/	
-/*		Beg of Second Change Cache 	   */
+/*		Beg of Second Chance Cache 	   */
 /***************************************/
 
 /*@ predicate Unique{L}(int *a, integer size) =
@@ -68,11 +68,10 @@ flash_size_t ChancePtr = 0; // index in ChanceArr
 flash_size_t CacheSize = SC_CACHE_SIZE;
 
 /*@ requires 0 < CacheSize < 2147483645 && page >= 0;
-    requires \valid(  Cache+(0..size-1) );
-    requires Unique(Cache, size);
-    requires \valid(  ChanceArr+(0..size-1) );
-    assigns Cache[0..size-1];
-    assigns ChanceArr[0..size-1];
+    requires \valid(  Cache+(0..CacheSize-1) );
+    requires Unique(Cache, CacheSize);
+    requires \valid(  ChanceArr+(0..CacheSize-1) );
+    assigns ChanceArr[0..CacheSize-1];
     ensures Unique(Cache, size);
 */
 // update ChanceArr if page exist, return if page exist
@@ -94,8 +93,8 @@ int find_and_update(flash_size_t page)
 
 /*@ requires 0 < CacheSize < 2147483645 && page >= 0;
     requires CacheSize-1 >= ChancePtr >= 0;
-    requires \valid( Cache+(0..size-1) );
-    requires Unique(Cache,size);
+    requires \valid( Cache+(0..Cachesize-1) );
+    requires Unique(Cache,Cachesize);
     assigns Cache[0..CacheSize-1];
     assigns ChancePtr[0..CacheSize-1];
    
@@ -109,7 +108,7 @@ void replace_and_update(flash_size_t page)
 	int idx = ChancePtr;
 	/*@ loop assigns Cache[0..CacheSize-1];
         loop assigns idx;
-        loop assigns ChanceArr[0..size-1];
+        loop assigns ChanceArr[0..CacheSize-1];
         loop invariant 0 <= idx <= CacheSize-1;
 	*/
 	while (1) {
@@ -132,7 +131,7 @@ void updateCache(flash_size_t page){
 }
 
 /***************************************/	
-/*		End of Second Change Cache 	   */
+/*		End of Second Chance Cache 	   */
 /***************************************/
 
 
@@ -176,34 +175,64 @@ void FTLInvalidatePage(flash_size_t pba){
 }
 
 //******** Update LowActiveBlockPtr, LowActivePagePtr, HighActiveBlockPtr, HighActivePagePtr, LowFreeBlockListHead, HighFreeBlockListHead *******//
+// pre-condition : 
+// 	LowActivePagePtr < PAGE_PER_BLOCK or LowCleanBlockCnt > 1;
+//  LowFreeBlockListHead < MAXBLOCK && LowFreeBlockListTail < MAXBLOCK;
+//  LowActiveBlockPtr == LowFreeBlockList[LowFreeBlockListHead];
+//  \assigns LowActiveBlockPtr, LowFreeBlockListHead, LowCleanBlockCnt, LowActivePagePtr;
+//
+// post-condition:
+//	case1 \old(LowActivePagePtr) >= PAGE_PER_BLOCK  ==> 
+// 		LowActivePagePtr==0 && LowCleanBlockCnt==\old(LowCleanBlockCnt)-1
+// 		case1.1 \old(LowFreeBlockListHead)+1 >= MAXBLOCK ==> LowFreeBlockListHead==0;
+// 		case1.2 \old(LowFreeBlockListHead)+1 < MAXBLOCK ==> LowFreeBlockListHead==\old(LowFreeBlockListHead)+1;
+//  case2 \old(LowActivePagePtr) < PAGE_PER_BLOCK  ==> 
+// 		LowActivePagePtr==\old(LowActivePagePtr) && LowCleanBlockCnt==\old(LowCleanBlockCnt) &&
+// 		LowFreeBlockListHead==\old(LowFreeBlockListHead) 
+// 
+//  LowActiveBlockPtr == LowFreeBlockList[LowFreeBLockListHead] ;
+//  
 void FTLUpdateActivePtr(){
 	// update LowActivePtr
-	LowActiveBlockPtr = LowFreeBlockList[LowFreeBlockListHead];
+	// LowActiveBlockPtr = LowFreeBlockList[LowFreeBlockListHead];
 	if( LowActivePagePtr >= PAGE_PER_BLOCK )
 	{
 		LowActivePagePtr = 0;
 		LowFreeBlockList[LowFreeBlockListHead] = FBL_NOT_IN_LIST;
 		LowFreeBlockListHead++;
 		LowCleanBlockCnt--;
-		if(LowFreeBlockListHead < MAXBLOCK && LowFreeBlockListHead <= LowFreeBlockListTail) 
-		{
-			LowActiveBlockPtr = LowFreeBlockList[LowFreeBlockListHead];
-		}
-		else if (LowFreeBlockListHead >= MAXBLOCK && LowFreeBlockListHead <= LowFreeBlockListTail)
-		{	
+		//FIXME
+		// case1 :      head      tail
+		//		   [0 0 0 1 1 1 1 1 0 0 0] 			
+		//
+		// case2 : 	  tail 			head
+		//		   [1 1 0 0 0 0 0 0 0 1 1]
+		if(LowFreeBlockListHead > LowFreeBlockListTail && 
+		   LowFreeBlockListHead >= MAXBLOCK){
 			LowFreeBlockListHead = 0;
-			LowActiveBlockPtr = LowFreeBlockList[LowFreeBlockListHead];
 		}
-		else // Head > Tail
-		{
-			printf("Error: No free block in lowered numbered list\n");
-			exit(1);
-		}
+		LowActiveBlockPtr = LowFreeBlockList[LowFreeBlockListHead];
+
+
+		// if(LowFreeBlockListHead < MAXBLOCK && LowFreeBlockListHead <= LowFreeBlockListTail) 
+		// {
+		// 	LowActiveBlockPtr = LowFreeBlockList[LowFreeBlockListHead];
+		// }
+		// else if (LowFreeBlockListHead >= MAXBLOCK && LowFreeBlockListHead <= LowFreeBlockListTail)
+		// {	
+		// 	LowFreeBlockListHead = 0;
+		// 	LowActiveBlockPtr = LowFreeBlockList[LowFreeBlockListHead];
+		// }
+		// else // Head > Tail
+		// {
+		// 	printf("Error: No free block in lowered numbered list\n");
+		// 	exit(1);
+		// }
 
 	}
 
 	// update HighActivePtr
-	if( MaxWear <= M )  //This condition means all blocks are in lower numbered list
+	if( MaxWear <= MinWear + M )  //This condition means all blocks are in lower numbered list
 	{
 		HighActiveBlockPtr = LowActiveBlockPtr;
 		HighActivePagePtr = LowActivePagePtr;
@@ -217,20 +246,27 @@ void FTLUpdateActivePtr(){
 			HighFreeBlockList[HighFreeBlockListHead] = FBL_NOT_IN_LIST;
 			HighFreeBlockListHead++;
 			HighCleanBlockCnt--;
-			if(HighFreeBlockListHead < MAXBLOCK && HighFreeBlockListHead <= HighFreeBlockListTail)
-			{
-				HighActiveBlockPtr = HighFreeBlockList[HighFreeBlockListHead];
-			}
-			else if(HighFreeBlockListHead >= MAXBLOCK && HighFreeBlockListHead <= HighFreeBlockListTail)
-			{	
+
+			if(HighFreeBlockListHead > HighFreeBlockListTail && 
+			   HighFreeBlockListHead >= MAXBLOCK){
 				HighFreeBlockListHead = 0;
-				HighActiveBlockPtr = HighFreeBlockList[HighFreeBlockListHead];
 			}
-			else
-			{
-				printf("Error: No free block in higher numbered list\n");
-				exit(1);
-			}
+			HighActiveBlockPtr = HighFreeBlockList[HighFreeBlockListHead];
+
+			// if(HighFreeBlockListHead < MAXBLOCK && HighFreeBlockListHead <= HighFreeBlockListTail)
+			// {
+			// 	HighActiveBlockPtr = HighFreeBlockList[HighFreeBlockListHead];
+			// }
+			// else if(HighFreeBlockListHead >= MAXBLOCK && HighFreeBlockListHead <= HighFreeBlockListTail)
+			// {	
+			// 	HighFreeBlockListHead = 0;
+			// 	HighActiveBlockPtr = HighFreeBlockList[HighFreeBlockListHead];
+			// }
+			// else
+			// {
+			// 	printf("Error: No free block in higher numbered list\n");
+			// 	exit(1);
+			// }
 
 		}
 
